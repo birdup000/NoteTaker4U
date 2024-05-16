@@ -75,6 +75,215 @@ except ImportError:
 
 audio = pyaudio.PyAudio()
 
+
+
+class NoteTaker4ULayout(FloatLayout):
+    def __init__(self, server, api_key, agent_name, whisper_model, **kwargs):
+        super().__init__(**kwargs)
+        self.size_hint = (1, 1)
+
+        # Background
+        with self.canvas.before:
+            Color(0.9, 0.9, 0.9, 1)  # Light background color
+            Rectangle(pos=self.pos, size=self.size)
+
+        # Header
+        header_layout = BoxLayout(orientation="horizontal", size_hint=(1, 0.15), spacing=20, padding=20)
+        self.add_widget(header_layout)
+
+        logo_image = Image(source="logo.png", size_hint=(0.2, 1))
+        header_layout.add_widget(logo_image)
+
+        title_label = Label(
+            text="NoteTaker4U",
+            size_hint=(0.8, 1),
+            color=(0.2, 0.2, 0.2, 1),  # Dark text color
+            font_size=48,
+            bold=True,
+            halign="left",
+            valign="middle",
+        )
+        header_layout.add_widget(title_label)
+
+        subtitle_label = Label(
+            text="Your AI-Powered Note-Taking Assistant",
+            size_hint=(0.8, 0.5),
+            color=('#ffffff'),  # Subtitle text color
+            font_size=24,
+            italic=True,
+            halign="left",
+            valign="top",
+        )
+        header_layout.add_widget(subtitle_label)
+
+        # Main Content
+        content_layout = BoxLayout(orientation="horizontal", size_hint=(1, 0.7), spacing=20, padding=20)
+        self.add_widget(content_layout)
+
+        # Transcript
+        transcript_layout = BoxLayout(orientation="vertical", size_hint=(0.5, 1), spacing=10)
+        content_layout.add_widget(transcript_layout)
+
+        transcript_label = Label(
+            text="Transcript",
+            size_hint=(1, 0.1),
+            color=('grey'),  # Dark text color
+            font_size=24,
+            bold=True,
+        )
+        transcript_layout.add_widget(transcript_label)
+
+        self.transcript_text = TextInput(
+            size_hint=(1, 0.9),
+            readonly=False,
+            background_color=(1, 1, 1, 1),  # White input background color
+            foreground_color=(0.2, 0.2, 0.2, 1),  # Dark text color
+            font_size=18,
+            padding=(20, 20),
+            multiline=True,
+            hint_text="Transcript will appear here...",
+        )
+        transcript_scroll = ScrollView(size_hint=(1, 0.9))
+        transcript_scroll.add_widget(self.transcript_text)
+        transcript_layout.add_widget(transcript_scroll)
+
+        # Notes
+        notes_layout = BoxLayout(orientation="vertical", size_hint=(0.5, 1), spacing=10)
+        content_layout.add_widget(notes_layout)
+
+        notes_label = Label(
+            text="Notes",
+            size_hint=(1, 0.1),
+            color=("grey"),  # Dark text color
+            font_size=24,
+            bold=True,
+        )
+        notes_layout.add_widget(notes_label)
+
+        self.notes_text = TextInput(
+            size_hint=(1, 0.9),
+            readonly=False,
+            background_color=(1, 1, 1, 1),  # White input background color
+            foreground_color=(0.2, 0.2, 0.2, 1),  # Dark text color
+            font_size=18,
+            padding=(20, 20),
+            multiline=True,
+            hint_text="Notes will appear here...",
+        )
+        notes_scroll = ScrollView(size_hint=(1, 0.9))
+        notes_scroll.add_widget(self.notes_text)
+        notes_layout.add_widget(notes_scroll)
+
+        # Footer
+        footer_layout = BoxLayout(orientation="horizontal", size_hint=(1, 0.15), spacing=20, padding=20)
+        self.add_widget(footer_layout)
+
+        self.start_button = Button(
+            text="Start Listening",
+            size_hint=(0.3, 1),
+            on_press=self.start_listening,
+            background_color=(0, 0.7, 0, 1),  # Green button color
+            color=(1, 1, 1, 1),  # White text color
+            font_size=18,
+            bold=True,
+        )
+        footer_layout.add_widget(self.start_button)
+
+        self.stop_button = Button(
+            text="Stop Listening",
+            size_hint=(0.3, 1),
+            on_press=self.stop_listening,
+            background_color=(0.7, 0, 0, 1),  # Red button color
+            color=(1, 1, 1, 1),  # White text color
+            font_size=18,
+            bold=True,
+        )
+        footer_layout.add_widget(self.stop_button)
+
+        self.save_button = Button(
+            text="Save Notes",
+            size_hint=(0.3, 1),
+            on_press=lambda instance: self.save_notes(instance),
+            background_color=(0, 0.7, 0, 1),  # Green button color
+            color=(1, 1, 1, 1),  # White text color
+            font_size=18,
+            bold=True,
+        )
+        footer_layout.add_widget(self.save_button)
+
+        self.progress_bar = ProgressBar(
+            size_hint=(0.4, 1),
+            value=0,
+        )
+        footer_layout.add_widget(self.progress_bar)
+
+        self.listener = AGiXTListen(
+            server=server,
+            api_key=api_key,
+            agent_name=agent_name,
+            whisper_model=whisper_model,
+            wake_functions={
+                "transcribe": self.transcribe_audio,
+                "generate notes": self.generate_notes,
+            },
+        )
+
+        self.audio_thread = None
+
+    def start_listening(self, instance):
+        self.audio_thread = threading.Thread(target=self.listener.listen)
+        self.audio_thread.start()
+        self.progress_bar.value = 100
+
+    def stop_listening(self, instance):
+        self.listener.stop_listening()
+        if self.audio_thread:
+            self.audio_thread.join()
+        self.progress_bar.value = 0
+
+
+    def transcribe_audio(self, text):
+        self.transcript_text.text = text
+        return "Transcription complete. What would you like me to do next?"
+
+    def generate_notes(self, text):
+        notes = self.listener.sdk.execute_command(
+            agent_name=self.listener.agent_name,
+            command_name="Summarize Text",
+            command_args={"text": text},
+            conversation_name=self.listener.conversation_name,
+        )
+        self.notes_text.text = notes
+        return "Notes generated. You can now save them."
+
+    def save_notes(self, instance):
+        notes = self.notes_text.text.strip()
+        if notes:
+            file_name = f"notes_{self.listener.conversation_name}.txt"
+            with open(file_name, "w") as f:
+                f.write(notes)
+            print(f"Notes saved to {file_name}")
+        else:
+            print("No notes to save.")
+
+    def on_start(self):
+        # Add hover effect to buttons
+        self.start_button.bind(on_enter=self.button_hover)
+        self.start_button.bind(on_leave=self.button_normal)
+        self.stop_button.bind(on_enter=self.button_hover)
+        self.stop_button.bind(on_leave=self.button_normal)
+        self.save_button.bind(on_enter=self.button_hover)
+        self.save_button.bind(on_leave=self.button_normal)
+
+    def button_hover(self, instance):
+        instance.background_color = (0.8, 0.8, 0.8, 1)  # Light gray hover color
+
+    def button_normal(self, instance):
+        if instance == self.start_button or instance == self.save_button:
+            instance.background_color = (0, 0.7, 0, 1)  # Green button color
+        elif instance == self.stop_button:
+            instance.background_color = (0.7, 0, 0, 1)  # Red button color
+
 class NoteTaker4UApp(App):
     def build(self):
         self.title = "NoteTaker4U"
@@ -121,178 +330,7 @@ class NoteTaker4UApp(App):
             self.agent_name = "gpt4free"
             self.whisper_model = ""
 
-
-class NoteTaker4ULayout(FloatLayout):
-    def __init__(self, server, api_key, agent_name, whisper_model, **kwargs):
-        super().__init__(**kwargs)
-        self.size_hint = (1, 1)
-
-        # Background
-        with self.canvas.before:
-            Color(0.2, 0.2, 0.2, 1)  # Dark background color
-            Rectangle(pos=self.pos, size=self.size)
-
-        # Header
-        header_layout = BoxLayout(orientation="horizontal", size_hint=(1, 0.1), spacing=20, padding=20)
-        self.add_widget(header_layout)
-
-        logo_image = Image(source="logo.png", size_hint=(0.1, 1))
-        header_layout.add_widget(logo_image)
-
-        title_label = Label(
-            text="NoteTaker4U",
-            size_hint=(0.8, 1),
-            color=(1, 1, 1, 1),  # White text color
-            font_size=32,
-            bold=True,
-            halign="center",
-        )
-        header_layout.add_widget(title_label)
-
-        # Main Content
-        content_layout = BoxLayout(orientation="horizontal", size_hint=(1, 0.8), spacing=20, padding=20)
-        self.add_widget(content_layout)
-
-        # Transcript
-        transcript_layout = BoxLayout(orientation="vertical", size_hint=(0.5, 1), spacing=10)
-        content_layout.add_widget(transcript_layout)
-
-        transcript_label = Label(
-            text="Transcript",
-            size_hint=(1, 0.1),
-            color=(1, 1, 1, 1),  # White text color
-            font_size=24,
-            bold=True,
-        )
-        transcript_layout.add_widget(transcript_label)
-
-        self.transcript_text = TextInput(
-            size_hint=(1, 0.9),
-            readonly=False,
-            background_color=(0.3, 0.3, 0.3, 1),  # Dark input background color
-            foreground_color=(1, 1, 1, 1),  # White text color
-            font_size=18,
-            padding=(20, 20),
-            multiline=True,
-            hint_text="Transcript will appear here...",
-        )
-        transcript_layout.add_widget(self.transcript_text)
-
-        # Notes
-        notes_layout = BoxLayout(orientation="vertical", size_hint=(0.5, 1), spacing=10)
-        content_layout.add_widget(notes_layout)
-
-        notes_label = Label(
-            text="Notes",
-            size_hint=(1, 0.1),
-            color=(1, 1, 1, 1),  # White text color
-            font_size=24,
-            bold=True,
-        )
-        notes_layout.add_widget(notes_label)
-
-        self.notes_text = TextInput(
-            size_hint=(1, 0.9),
-            readonly=False,
-            background_color=(0.3, 0.3, 0.3, 1),  # Dark input background color
-            foreground_color=(1, 1, 1, 1),  # White text color
-            font_size=18,
-            padding=(20, 20),
-            multiline=True,
-            hint_text="Notes will appear here...",
-        )
-        notes_layout.add_widget(self.notes_text)
-
-        # Footer
-        footer_layout = BoxLayout(orientation="horizontal", size_hint=(1, 0.1), spacing=20, padding=20)
-        self.add_widget(footer_layout)
-
-        self.start_button = Button(
-            text="Start Listening",
-            size_hint=(0.3, 1),
-            on_press=self.start_listening,
-            background_color=(0, 0.7, 0, 1),  # Green button color
-            color=(1, 1, 1, 1),  # White text color
-            font_size=18,
-            bold=True,
-        )
-        footer_layout.add_widget(self.start_button)
-
-        self.stop_button = Button(
-            text="Stop Listening",
-            size_hint=(0.3, 1),
-            on_press=self.stop_listening,
-            background_color=(0.7, 0, 0, 1),  # Red button color
-            color=(1, 1, 1, 1),  # White text color
-            font_size=18,
-            bold=True,
-        )
-        footer_layout.add_widget(self.stop_button)
-
-        self.save_button = Button(
-            text="Save Notes",
-            size_hint=(0.3, 1),
-            on_press=self.save_notes,
-            background_color=(0, 0.7, 0, 1),  # Green button color
-            color=(1, 1, 1, 1),  # White text color
-            font_size=18,
-            bold=True,
-        )
-        footer_layout.add_widget(self.save_button)
-
-        self.progress_bar = ProgressBar(
-            size_hint=(0.4, 1),
-            value=0,
-        )
-        footer_layout.add_widget(self.progress_bar)
-
-        self.listener = AGiXTListen(
-            server=server,
-            api_key=api_key,
-            agent_name=agent_name,
-            whisper_model=whisper_model,
-            wake_functions={
-                "transcribe": self.transcribe_audio,
-                "generate notes": self.generate_notes,
-            },
-        )
-
-        self.audio_thread = None
-
-    def start_listening(self, instance):
-        self.audio_thread = threading.Thread(target=self.listener.listen)
-        self.audio_thread.start()
-        self.progress_bar.value = 100
-
-    def stop_listening(self, instance):
-        self.listener.stop_listening()
-        if self.audio_thread:
-            self.audio_thread.join()
-        self.progress_bar.value = 0
-
-    def transcribe_audio(self, text):
-        self.transcript_text.text = text
-        return "Transcription complete. What would you like me to do next?"
-
-    def generate_notes(self, text):
-        notes = self.listener.sdk.execute_command(
-            agent_name=self.listener.agent_name,
-            command_name="Summarize Text",
-            command_args={"text": text},
-            conversation_name=self.listener.conversation_name,
-        )
-        self.notes_text.text = notes
-        return "Notes generated. You can now save them."
-
-    def save_notes(self, instance):
-        notes = self.notes_text.text.strip()
-        if notes:
-            file_name = f"notes_{self.listener.conversation_name}.txt"
-            with open(file_name, "w") as f:
-                f.write(notes)
-            print(f"Notes saved to {file_name}")
-        else:
-            print("No notes to save.")
+ 
 
 
 
