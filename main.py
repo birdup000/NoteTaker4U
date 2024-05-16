@@ -75,50 +75,52 @@ except ImportError:
 
 audio = pyaudio.PyAudio()
 
-
-
 class NoteTaker4ULayout(FloatLayout):
     def __init__(self, server, api_key, agent_name, whisper_model, **kwargs):
         super().__init__(**kwargs)
         self.size_hint = (1, 1)
 
-        # Background
-        with self.canvas.before:
-            Color(0.9, 0.9, 0.9, 1)  # Light background color
-            Rectangle(pos=self.pos, size=self.size)
-
-        # Header
-        header_layout = BoxLayout(orientation="horizontal", size_hint=(1, 0.15), spacing=20, padding=20)
+        # Add the logo
+        logo_image = Image(
+            source='logo.jpeg',
+            size_hint=(0.2, 1),
+            allow_stretch=True,
+            keep_ratio=False,
+        )
+        header_layout = BoxLayout(orientation="horizontal", size_hint=(1, 0.1), pos_hint={'top': 1})
         self.add_widget(header_layout)
 
-        logo_image = Image(source="logo.png", size_hint=(0.2, 1))
         header_layout.add_widget(logo_image)
 
+            # Add the title
         title_label = Label(
             text="NoteTaker4U",
-            size_hint=(0.8, 1),
-            color=(0.2, 0.2, 0.2, 1),  # Dark text color
+            size_hint=(0.6, 1),
+            color=("grey"),  # Dark text color
             font_size=48,
             bold=True,
             halign="left",
             valign="middle",
+            pos_hint={'top': 1}  # Move the label to the top of the screen
         )
         header_layout.add_widget(title_label)
 
+        # Add the subtitle
         subtitle_label = Label(
             text="Your AI-Powered Note-Taking Assistant",
             size_hint=(0.8, 0.5),
             color=('#ffffff'),  # Subtitle text color
-            font_size=24,
+            font_size=22,
             italic=True,
             halign="left",
-            valign="top",
+            valign="bottom",
         )
         header_layout.add_widget(subtitle_label)
 
         # Main Content
-        content_layout = BoxLayout(orientation="horizontal", size_hint=(1, 0.7), spacing=20, padding=20)
+        content_layout = BoxLayout(orientation="horizontal", size_hint=(1, 0.7), spacing=20, padding=20, pos_hint={'top': 0.9})
         self.add_widget(content_layout)
+
 
         # Transcript
         transcript_layout = BoxLayout(orientation="vertical", size_hint=(0.5, 1), spacing=10)
@@ -214,6 +216,7 @@ class NoteTaker4ULayout(FloatLayout):
         self.progress_bar = ProgressBar(
             size_hint=(0.4, 1),
             value=0,
+            max=100,
         )
         footer_layout.add_widget(self.progress_bar)
 
