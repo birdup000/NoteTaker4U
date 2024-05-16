@@ -13,21 +13,25 @@ try:
 except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "requests"])
     import requests
+
 try:
     import pyaudio
 except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "pyaudio"])
     import pyaudio
+
 try:
     import webrtcvad
 except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "webrtcvad"])
     import webrtcvad
+
 try:
     import numpy as np
 except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "numpy"])
     import numpy as np
+
 try:
     from agixtsdk import AGiXTSDK
 except ImportError:
@@ -50,6 +54,7 @@ try:
     from kivy.app import App
     from kivy.uix.gridlayout import GridLayout
     from kivy.utils import get_color_from_hex
+    from kivy.uix.widget import Widget
 except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "kivy"])
     from kivy.app import App
@@ -66,9 +71,9 @@ except ImportError:
     from kivy.graphics import Color, Rectangle
     from kivy.uix.gridlayout import GridLayout
     from kivy.utils import get_color_from_hex
+    from kivy.uix.widget import Widget
 
 audio = pyaudio.PyAudio()
-
 
 class NoteTaker4UApp(App):
     def build(self):
@@ -111,100 +116,135 @@ class NoteTaker4UApp(App):
             self.whisper_model = self.config.get("AGiXT", "whisper_model")
         else:
             print("Configuration file not found. Using default values.")
-            self.server = "http://localhost:7437"
+            self.server = "http://localhost:7437"  
             self.api_key = ""
             self.agent_name = "gpt4free"
             self.whisper_model = ""
 
 
-from kivy.app import App
-from kivy.uix.gridlayout import GridLayout
-from kivy.uix.label import Label
-from kivy.uix.textinput import TextInput
-from kivy.uix.button import Button
-from kivy.uix.progressbar import ProgressBar
-from kivy.graphics import Color, Rectangle
-from kivy.core.window import Window
-from kivy.utils import get_color_from_hex
-
-class NoteTaker4ULayout(GridLayout):
+class NoteTaker4ULayout(FloatLayout):
     def __init__(self, server, api_key, agent_name, whisper_model, **kwargs):
         super().__init__(**kwargs)
-        self.cols = 2
-        self.padding = 20
-        self.spacing = 20
+        self.size_hint = (1, 1)
 
+        # Background
         with self.canvas.before:
-            Color(get_color_from_hex("#f2f2f2"))
+            Color(0.2, 0.2, 0.2, 1)  # Dark background color
             Rectangle(pos=self.pos, size=self.size)
 
-        self.transcript_label = Label(
+        # Header
+        header_layout = BoxLayout(orientation="horizontal", size_hint=(1, 0.1), spacing=20, padding=20)
+        self.add_widget(header_layout)
+
+        logo_image = Image(source="logo.png", size_hint=(0.1, 1))
+        header_layout.add_widget(logo_image)
+
+        title_label = Label(
+            text="NoteTaker4U",
+            size_hint=(0.8, 1),
+            color=(1, 1, 1, 1),  # White text color
+            font_size=32,
+            bold=True,
+            halign="center",
+        )
+        header_layout.add_widget(title_label)
+
+        # Main Content
+        content_layout = BoxLayout(orientation="horizontal", size_hint=(1, 0.8), spacing=20, padding=20)
+        self.add_widget(content_layout)
+
+        # Transcript
+        transcript_layout = BoxLayout(orientation="vertical", size_hint=(0.5, 1), spacing=10)
+        content_layout.add_widget(transcript_layout)
+
+        transcript_label = Label(
             text="Transcript",
-            size_hint=(0.2, 0.1),
-            color=get_color_from_hex("#333333"),
-            font_size=18,
+            size_hint=(1, 0.1),
+            color=(1, 1, 1, 1),  # White text color
+            font_size=24,
             bold=True,
         )
-        self.add_widget(self.transcript_label)
+        transcript_layout.add_widget(transcript_label)
 
         self.transcript_text = TextInput(
-            size_hint=(0.8, 0.4),
+            size_hint=(1, 0.9),
             readonly=False,
-            background_color=get_color_from_hex("#ffffff"),
-            foreground_color=get_color_from_hex("#333333"),
-            font_size=14,
-            padding=(10, 10),
-        )
-        self.add_widget(self.transcript_text)
-
-        self.notes_label = Label(
-            text="Notes",
-            size_hint=(0.2, 0.1),
-            color=get_color_from_hex("#333333"),
+            background_color=(0.3, 0.3, 0.3, 1),  # Dark input background color
+            foreground_color=(1, 1, 1, 1),  # White text color
             font_size=18,
+            padding=(20, 20),
+            multiline=True,
+            hint_text="Transcript will appear here...",
+        )
+        transcript_layout.add_widget(self.transcript_text)
+
+        # Notes
+        notes_layout = BoxLayout(orientation="vertical", size_hint=(0.5, 1), spacing=10)
+        content_layout.add_widget(notes_layout)
+
+        notes_label = Label(
+            text="Notes",
+            size_hint=(1, 0.1),
+            color=(1, 1, 1, 1),  # White text color
+            font_size=24,
             bold=True,
         )
-        self.add_widget(self.notes_label)
+        notes_layout.add_widget(notes_label)
 
         self.notes_text = TextInput(
-            size_hint=(0.8, 0.4),
+            size_hint=(1, 0.9),
             readonly=False,
-            background_color=get_color_from_hex("#ffffff"),
-            foreground_color=get_color_from_hex("#333333"),
-            font_size=14,
-            padding=(10, 10),
+            background_color=(0.3, 0.3, 0.3, 1),  # Dark input background color
+            foreground_color=(1, 1, 1, 1),  # White text color
+            font_size=18,
+            padding=(20, 20),
+            multiline=True,
+            hint_text="Notes will appear here...",
         )
-        self.add_widget(self.notes_text)
+        notes_layout.add_widget(self.notes_text)
+
+        # Footer
+        footer_layout = BoxLayout(orientation="horizontal", size_hint=(1, 0.1), spacing=20, padding=20)
+        self.add_widget(footer_layout)
 
         self.start_button = Button(
             text="Start Listening",
-            size_hint=(0.4, 0.1),
+            size_hint=(0.3, 1),
             on_press=self.start_listening,
-            background_color=get_color_from_hex("#33cc33"),
-            color=get_color_from_hex("#ffffff"),
-            font_size=16,
+            background_color=(0, 0.7, 0, 1),  # Green button color
+            color=(1, 1, 1, 1),  # White text color
+            font_size=18,
+            bold=True,
         )
-        self.add_widget(self.start_button)
+        footer_layout.add_widget(self.start_button)
+
+        self.stop_button = Button(
+            text="Stop Listening",
+            size_hint=(0.3, 1),
+            on_press=self.stop_listening,
+            background_color=(0.7, 0, 0, 1),  # Red button color
+            color=(1, 1, 1, 1),  # White text color
+            font_size=18,
+            bold=True,
+        )
+        footer_layout.add_widget(self.stop_button)
 
         self.save_button = Button(
             text="Save Notes",
-            size_hint=(0.4, 0.1),
+            size_hint=(0.3, 1),
             on_press=self.save_notes,
-            background_color=get_color_from_hex("#33cc33"),
-            color=get_color_from_hex("#ffffff"),
-            font_size=16,
+            background_color=(0, 0.7, 0, 1),  # Green button color
+            color=(1, 1, 1, 1),  # White text color
+            font_size=18,
+            bold=True,
         )
-        self.add_widget(self.save_button)
+        footer_layout.add_widget(self.save_button)
 
         self.progress_bar = ProgressBar(
-            size_hint=(0.8, 0.05),
+            size_hint=(0.4, 1),
             value=0,
         )
-        self.progress_bar.canvas.before.clear()
-        with self.progress_bar.canvas.before:
-            Color(get_color_from_hex("#33cc33"))
-            Rectangle(pos=self.progress_bar.pos, size=self.progress_bar.size)
-        self.add_widget(self.progress_bar)
+        footer_layout.add_widget(self.progress_bar)
 
         self.listener = AGiXTListen(
             server=server,
@@ -217,9 +257,18 @@ class NoteTaker4ULayout(GridLayout):
             },
         )
 
+        self.audio_thread = None
+
     def start_listening(self, instance):
-        self.listener.listen()
+        self.audio_thread = threading.Thread(target=self.listener.listen)
+        self.audio_thread.start()
         self.progress_bar.value = 100
+
+    def stop_listening(self, instance):
+        self.listener.stop_listening()
+        if self.audio_thread:
+            self.audio_thread.join()
+        self.progress_bar.value = 0
 
     def transcribe_audio(self, text):
         self.transcript_text.text = text
@@ -245,15 +294,6 @@ class NoteTaker4ULayout(GridLayout):
         else:
             print("No notes to save.")
 
-class NoteTakerApp(App):
-    def build(self):
-        Window.clearcolor = get_color_from_hex("#f2f2f2")
-        return NoteTaker4ULayout(
-            server="your_server_url",
-            api_key="your_api_key",
-            agent_name="your_agent_name",
-            whisper_model="your_whisper_model",
-        )
 
 
 
@@ -280,6 +320,8 @@ class AGiXTListen:
         )
         self.conversation_name = datetime.now().strftime("%Y-%m-%d")
         self.w = None
+        self.running = False
+
         if whisper_model != "":
             try:
                 from whisper_cpp import Whisper
@@ -335,7 +377,7 @@ class AGiXTListen:
             base64_audio = base64.b64encode(wav_buffer).decode()
             thread = threading.Thread(
                 target=self.transcribe_audio,
-                args=(base64_audio),
+                args=(base64_audio,),
             )
             thread.start()
 
@@ -385,6 +427,7 @@ class AGiXTListen:
                     stream.close()
 
     def listen(self):
+        self.running = True
         print("Listening for wake word...")
         vad = webrtcvad.Vad(1)
         stream = audio.open(
@@ -396,7 +439,7 @@ class AGiXTListen:
         )
         frames = []
         silence_frames = 0
-        while True:
+        while self.running:
             data = stream.read(320)
             frames.append(data)
             is_speech = vad.is_speech(data, 16000)
@@ -408,6 +451,9 @@ class AGiXTListen:
                     silence_frames = 0
             else:
                 silence_frames = 0
+
+    def stop_listening(self):
+        self.running = False
 
     def voice_chat(self, text):
         print(f"Sending text to agent: {text}")
@@ -432,5 +478,7 @@ class AGiXTListen:
 
 
 if __name__ == "__main__":
-    NoteTakerApp().run()
+    NoteTaker4UApp().run()
+
+
 
