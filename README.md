@@ -1,3 +1,3 @@
 # NoteTaker4U
 
-Note Taking App using opensource ai models for voice input notes
+Note Taking App using ai for voice input notes
