@@ -24,7 +24,8 @@ from kivymd.uix.scrollview import ScrollView
 from kivymd.uix.dialog import MDDialog
 from kivymd.uix.card import MDCard
 from kivy.uix.floatlayout import FloatLayout
-from kivy.uix.gridlayout import GridLayout
+from kivy.metrics import dp
+from kivymd.uix.gridlayout import MDGridLayout
 
 # Try to import PyAudio, install it if not found
 try:
@@ -68,7 +69,6 @@ logging.basicConfig(
     filename="agixt_listen.log",
 )
 
-
 class AGiXTListen:
     def __init__(
         self,
@@ -79,19 +79,25 @@ class AGiXTListen:
         whisper_model="base.en",
         wake_word="",  # Optional wake word, default empty string
     ):
-        self.sdk = AGiXTSDK(base_uri=server, api_key=api_key)
-        self.agent_name = agent_name
+        # Initialize SDK and settings only if API key is provided
+        if api_key:
+            self.sdk = AGiXTSDK(base_uri=server, api_key=api_key)
+            self.agent_name = agent_name
+            self.conversation_name = conversation_name or datetime.datetime.now().strftime("%Y-%m-%d")
+            self.conversation_history = self.sdk.get_conversation(
+                agent_name=self.agent_name,
+                conversation_name=self.conversation_name,
+                limit=20,
+                page=1,
+            )
+        else:
+            self.sdk = None
+            self.agent_name = None
+            self.conversation_name = None
+            self.conversation_history = None
+
         self.wake_word = wake_word.lower()
         self.wake_functions = {"chat": self.default_voice_chat}
-        self.conversation_name = conversation_name or datetime.datetime.now().strftime(
-            "%Y-%m-%d"
-        )
-        self.conversation_history = self.sdk.get_conversation(
-            agent_name=self.agent_name,
-            conversation_name=self.conversation_name,
-            limit=20,
-            page=1,
-        )
         self.TRANSCRIPTION_MODEL = whisper_model
         self.audio = pyaudio.PyAudio()
         self.w = WhisperModel(
@@ -105,13 +111,16 @@ class AGiXTListen:
         self.vad = webrtcvad.Vad(3)  # Aggressiveness is 3 (highest)
 
         # Initialize Pocketsphinx later if a wake word is provided
-        self.ps = None  
+        self.ps = None
         self.is_speaking_activity = False
 
-    def transcribe_audio(self, audio_path, translate=False):
+    def transcribe_audio(self, audio_data, translate=False):
         try:
+            # Rewind the BytesIO object
+            audio_data.seek(0) 
+
             segments, _ = self.w.transcribe(
-                audio_path,
+                audio_data,
                 task="transcribe" if not translate else "translate",
                 vad_filter=True,
                 vad_parameters=dict(min_silence_duration_ms=500),
@@ -124,17 +133,11 @@ class AGiXTListen:
 
     def text_to_speech(self, text):
         try:
-            tts_url = self.sdk.text_to_speech(
-                agent_name=self.agent_name,
-                text=text,
-            )
+            tts_url = self.sdk.text_to_speech(agent_name=self.agent_name, text=text)
             response = requests.get(tts_url)
             generated_audio = response.content
             stream = self.audio.open(
-                format=pyaudio.paInt16,
-                channels=1,
-                rate=16000,
-                output=True,
+                format=pyaudio.paInt16, channels=1, rate=16000, output=True
             )
             stream.write(generated_audio)
             stream.stop_stream()
@@ -148,7 +151,8 @@ class AGiXTListen:
         FORMAT = pyaudio.paInt16
         CHANNELS = 1
         RATE = 16000
-        RECORD_SECONDS = 60  # 60-second chunks for continuous recording
+        RECORD_SECONDS = 2  # Reduced chunk size for quicker transcription updates
+
         stream = self.audio.open(
             format=FORMAT,
             channels=CHANNELS,
@@ -168,18 +172,32 @@ class AGiXTListen:
                 for _ in range(0, int(RATE / CHUNK * RECORD_SECONDS)):
                     if not self.is_recording:
                         break
-                    if is_input:
-                        data = stream.read(CHUNK)
-                        frames.append(data)
-                    else:
-                        if not self.is_speaking_activity:
-                            data = stream.write(b"\x00" * CHUNK)
-                            frames.append(data if data is not None else b"\x00" * CHUNK)
-                        else:
-                            # Skip recording when speaking activity messages
-                            stream.write(b"\x00" * CHUNK)
+                    data = stream.read(CHUNK)
+                    frames.append(data)
+                
+                # Transcribe audio chunk directly
                 if frames:
-                    self.process_audio_chunk(frames, is_input, start_time)
+                    audio_chunk = b"".join(frames)
+                    transcription = self.transcribe_audio(BytesIO(audio_chunk))
+                    
+                    if len(transcription) > 10:
+                        memory_text = f"Content of {audio_type} voice transcription from {start_time}:\n{transcription}"
+                        # Send to AGiXT if connected (sdk is initialized)
+                        if self.sdk:
+                            self.sdk.learn_text(
+                                agent_name=self.agent_name,
+                                user_input=transcription,
+                                text=memory_text,
+                                collection_number=self.conversation_name,
+                            )
+                            logging.info(f"Saved {audio_type} transcription to agent memories: {transcription}")
+                        else:
+                            logging.info(f"AGiXT SDK not connected. Transcription not sent: {transcription}")
+
+                        # Update the main transcription text
+                        if is_input:  # Only update from input audio
+                            app.transcribed_text += transcription + " "
+
         except Exception as e:
             logging.error(f"Error in continuous recording and transcription: {str(e)}")
             logging.debug(traceback.format_exc())
@@ -187,36 +205,12 @@ class AGiXTListen:
             stream.stop_stream()
             stream.close()
 
-    def process_audio_chunk(self, frames, is_input, start_time):
-        audio_data = b"".join(frames)
-        audio_type = "input" if is_input else "output"
-        date_folder = start_time.strftime("%Y-%m-%d")
-        os.makedirs(date_folder, exist_ok=True)
-        filename = f"{date_folder}/{audio_type}_{start_time.strftime('%H-%M-%S')}.wav"
-        with wave.open(filename, "wb") as wf:
-            wf.setnchannels(1)
-            wf.setsampwidth(self.audio.get_sample_size(pyaudio.paInt16))
-            wf.setframerate(16000)
-            wf.writeframes(audio_data)
-        transcription = self.transcribe_audio(filename)
-        if len(transcription) > 10:
-            memory_text = f"Content of {audio_type} voice transcription from {start_time}:\n{transcription}"
-            self.sdk.learn_text(
-                agent_name=self.agent_name,
-                user_input=transcription,
-                text=memory_text,
-                collection_number=self.conversation_name,
-            )
-            logging.info(
-                f"Saved {audio_type} transcription to agent memories: {filename}"
-            )
-
     def default_voice_chat(self, text):
         logging.info(f"Sending text to agent: {text}")
         return self.sdk.chat(
             agent_name=self.agent_name,
             user_input=text,
-            conversation=self.conversation_name,
+            conversation=self.conversation_name, 
             context_results=6,
         )
 
@@ -287,21 +281,24 @@ class AGiXTListen:
     def check_conversation_updates(self):
         while self.is_recording:
             time.sleep(2)  # Check every 2 seconds
-            new_history = self.sdk.get_conversation(
-                agent_name=self.agent_name,
-                conversation_name=self.conversation_name,
-                limit=20,
-                page=1,
-            )
-            new_entries = [
-                entry for entry in new_history if entry not in self.conversation_history
-            ]
-            for entry in new_entries:
-                if entry.startswith("[ACTIVITY]"):
-                    activity_message = entry.split("[ACTIVITY]")[1].strip()
-                    logging.info(f"Received activity message: {activity_message}")
-                    self.speak_activity(activity_message)
-            self.conversation_history = new_history
+            if self.sdk:
+                new_history = self.sdk.get_conversation(
+                    agent_name=self.agent_name,
+                    conversation_name=self.conversation_name,
+                    limit=20,
+                    page=1,
+                )
+                new_entries = [
+                    entry for entry in new_history if entry not in self.conversation_history
+                ]
+                for entry in new_entries:
+                    if entry.startswith("[ACTIVITY]"):
+                        activity_message = entry.split("[ACTIVITY]")[1].strip()
+                        logging.info(f"Received activity message: {activity_message}")
+                        self.speak_activity(activity_message)
+                self.conversation_history = new_history
+            else:
+                logging.info("AGiXT SDK not connected. Skipping conversation updates.")
 
     def speak_activity(self, message):
         self.is_speaking_activity = True
@@ -309,6 +306,10 @@ class AGiXTListen:
         self.is_speaking_activity = False
 
     def start_recording(self):
+        if not self.sdk:
+            logging.error("AGiXT SDK not initialized. Cannot start recording.")
+            return
+
         self.is_recording = True
         self.input_recording_thread = threading.Thread(
             target=self.continuous_record_and_transcribe, args=(True,)
@@ -321,7 +322,7 @@ class AGiXTListen:
         )
 
         # Start wake word thread only if wake_word is set
-        if self.wake_word:
+        if self.wake_word and self.ps:
             self.wake_word_thread = threading.Thread(target=self.listen_for_wake_word)
             self.wake_word_thread.start()
 
@@ -360,7 +361,7 @@ class AGiXTListen:
     def listen(self):
         signal.signal(signal.SIGINT, self.graceful_shutdown)
         signal.signal(signal.SIGTERM, self.graceful_shutdown)
-        self.start_recording() # Start recording regardless of wake word 
+        self.start_recording()  # Start recording regardless of wake word
         try:
             while True:
                 time.sleep(1)
@@ -371,56 +372,66 @@ class AGiXTListen:
             self.stop_recording()
             logging.info("Recording stopped.")
 
+
 class AGiXTNoteApp(MDApp):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.listener = None
         self.is_recording = False
         self.settings_dialog = None
+        self.transcribed_text = "" # To store the transcribed text
 
     def build(self):
-        self.theme_cls.theme_style = "Dark"  # or "Light"
+        self.theme_cls.theme_style = "Dark"
         self.theme_cls.primary_palette = "Teal"
 
         screen = MDScreen()
-        main_layout = MDBoxLayout(orientation='vertical', padding=20, spacing=20)
+        main_layout = MDBoxLayout(orientation="vertical", padding=dp(20), spacing=dp(20))
 
         # Title
         title_label = MDLabel(
-            text="AGiXT Advanced Notes", 
-            halign="center", 
-            font_style="H3", 
-            theme_text_color="Primary"
+            text="AGiXT Advanced Notes",
+            halign="center",
+            font_style="H3",
+            theme_text_color="Primary",
+            size_hint_y=None,  # Prevent title from stretching
+            height=dp(40),
         )
         main_layout.add_widget(title_label)
 
         # Notes Area (Scrollable Card)
         notes_card = MDCard(
-            orientation="vertical", 
-            padding=10, 
-            size_hint=(1, 0.7),
-            elevation=4
+            orientation="vertical",
+            padding=dp(10),
+            size_hint=(1, None),  # Allow card to expand vertically
+            height=dp(400),     # Initial height of the card
+            elevation=4,
         )
         self.notes_text_input = MDTextField(
-            readonly=True, 
+            readonly=True,
             multiline=True,
             hint_text="Notes will appear here...",
-            mode="rectangle"
+            mode="rectangle",
         )
         notes_card.add_widget(self.notes_text_input)
         main_layout.add_widget(notes_card)
 
         # Controls Area
         controls_layout = MDBoxLayout(
-            orientation="horizontal", 
-            size_hint_y=0.1, 
-            padding=10, 
-            spacing=20
+            orientation="horizontal",
+            size_hint_y=None,
+            height=dp(60),  # Fixed height for controls
+            padding=dp(10),
+            spacing=dp(20),
         )
 
         self.start_button = MDRaisedButton(text="Start Recording")
         self.start_button.bind(on_release=self.toggle_recording)
         controls_layout.add_widget(self.start_button)
+
+        self.send_to_agixt_button = MDRaisedButton(text="Send to AGiXT", disabled=True)
+        self.send_to_agixt_button.bind(on_release=self.send_transcription_to_agixt)
+        controls_layout.add_widget(self.send_to_agixt_button)
 
         settings_button = MDFlatButton(text="Settings")
         settings_button.bind(on_release=self.open_settings_dialog)
@@ -431,47 +442,50 @@ class AGiXTNoteApp(MDApp):
         return screen
 
     def toggle_recording(self, instance):
-        if not self.listener:
+        if not self.listener or not self.listener.sdk:
             self.show_error_dialog("Error", "Please configure settings first.")
             return
 
-        if not self.is_recording:
-            # Ensure Pocketsphinx is initialized before starting the wake word thread
-            if self.listener.wake_word and self.listener.ps is None:
-                self.show_error_dialog(
-                    "Error", 
-                    "Pocketsphinx not initialized. Please save settings with a wake word."
-                )
+        if self.is_recording:
+            self.is_recording = False
+            self.listener.stop_recording()
+            self.start_button.text = "Start Recording"
+            self.send_to_agixt_button.disabled = False # Enable send button
+
+        else:
+            # Ensure Pocketsphinx is initialized before starting if wake word is set
+            if self.listener.wake_word and not self.listener.ps:
+                self.show_error_dialog("Error", "Please save settings with a wake word.")
                 return
 
             self.is_recording = True
             self.listener.start_recording()
             self.start_button.text = "Stop Recording"
+            self.send_to_agixt_button.disabled = True # Disable send button while recording
             threading.Thread(target=self.update_notes).start()
-        else:
-            self.is_recording = False
-            self.listener.stop_recording()
-            self.start_button.text = "Start Recording"
 
     def update_notes(self):
         while self.is_recording:
-            time.sleep(2)  # Update notes every 2 seconds
-            if self.listener:
-                new_history = self.listener.sdk.get_conversation(
+            time.sleep(2)  # Update the UI every 2 seconds
+            self.notes_text_input.text = self.transcribed_text  
+
+    def send_transcription_to_agixt(self, instance):
+        if self.listener and self.listener.sdk and self.transcribed_text:
+            try:
+                memory_text = f"Content of voice transcription:\n{self.transcribed_text}"
+                self.listener.sdk.learn_text(
                     agent_name=self.listener.agent_name,
-                    conversation_name=self.listener.conversation_name,
-                    limit=20,
-                    page=1,
+                    user_input=self.transcribed_text,
+                    text=memory_text,
+                    collection_number=self.listener.conversation_name,
                 )
-                new_entries = [
-                    entry
-                    for entry in new_history
-                    if entry not in self.listener.conversation_history
-                ]
-                for entry in new_entries:
-                    if not entry.startswith("[ACTIVITY]"):
-                        self.notes_text_input.text += entry + "\n"
-                self.listener.conversation_history = new_history
+                logging.info("Transcription sent to AGiXT.")
+                self.show_error_dialog("Success", "Transcription sent to AGiXT.")
+            except Exception as e:
+                logging.error(f"Error sending transcription to AGiXT: {str(e)}")
+                self.show_error_dialog("Error", f"Failed to send transcription to AGiXT: {str(e)}")
+        else:
+            self.show_error_dialog("Error", "AGiXT not connected or no transcription available.")
 
     def open_settings_dialog(self, instance):
         if self.settings_dialog:
@@ -479,38 +493,32 @@ class AGiXTNoteApp(MDApp):
             return
 
         # Create content for settings dialog
-        content = GridLayout(cols=2, padding=20, spacing=10)
+        content = MDGridLayout(cols=2, padding=dp(20), spacing=dp(10), adaptive_height=True)
 
         server_label = MDLabel(text="Server URL:", halign="right")
         self.server_input = MDTextField(
             text="http://localhost:7437",
-            size_hint_x=0.7,
+            size_hint_x=None,  # Allow text field to expand to content
+            width=dp(250),
         )
-        
+
         api_key_label = MDLabel(text="API Key:", halign="right")
         self.api_key_input = MDTextField(
-            text="", 
-            password=True, 
-            size_hint_x=0.7
+            text="", password=True, size_hint_x=None, width=dp(250)
         )
-        
+
         agent_name_label = MDLabel(text="Agent Name:", halign="right")
-        self.agent_name_input = MDTextField(
-            text="gpt4free",
-            size_hint_x=0.7,
+        self.agent_name_input = MDTextField(text="gpt4free", size_hint_x=None, width=dp(250))
+
+        conversation_name_label = MDLabel(
+            text="Conversation Name:", halign="right"
         )
-        
-        conversation_name_label = MDLabel(text="Conversation Name:", halign="right")
         self.conversation_name_input = MDTextField(
-            text="", 
-            size_hint_x=0.7
+            text="", size_hint_x=None, width=dp(250)
         )
-        
+
         wake_word_label = MDLabel(text="Wake Word (Optional):", halign="right")
-        self.wake_word_input = MDTextField(
-            text="", 
-            size_hint_x=0.7
-        )
+        self.wake_word_input = MDTextField(text="", size_hint_x=None, width=dp(250))
 
         content.add_widget(server_label)
         content.add_widget(self.server_input)
@@ -554,8 +562,8 @@ class AGiXTNoteApp(MDApp):
                 wake_word=wake_word,
             )
 
-            # Initialize Pocketsphinx if wake_word is set
-            if wake_word:
+            # Initialize Pocketsphinx if wake_word is set and listener is initialized
+            if wake_word and self.listener.sdk:
                 self.listener.ps = Pocketsphinx(
                     hmm=get_model_path("en-us"),
                     lm=False,
@@ -600,5 +608,7 @@ class AGiXTNoteApp(MDApp):
         dialog = MDDialog(title=title, text=message)
         dialog.open()
 
+
 if __name__ == "__main__":
-    AGiXTNoteApp().run()
+    app = AGiXTNoteApp() # Create app instance
+    app.run()
