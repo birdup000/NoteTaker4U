@@ -13,6 +13,7 @@ import traceback
 import tarfile
 from urllib.request import urlretrieve
 import tempfile
+from collections import deque
 
 # KivyMD imports
 from kivymd.app import MDApp
@@ -30,6 +31,9 @@ from kivymd.uix.gridlayout import MDGridLayout
 from kivy.clock import Clock
 from kivymd.uix.toolbar import MDTopAppBar
 from kivymd.uix.list import OneLineListItem
+from kivymd.uix.button import MDRectangleFlatButton
+from kivymd.uix.behaviors import HoverBehavior
+from kivymd.uix.behaviors import RectangularRippleBehavior
 
 # Set clipboard provider to SDL2
 import kivy
@@ -48,7 +52,7 @@ from faster_whisper import WhisperModel
 import webrtcvad
 from pocketsphinx import Pocketsphinx, get_model_path
 import numpy as np
-from collections import deque
+from queue import Queue
 
 # Set up logging
 logging.basicConfig(
@@ -99,6 +103,9 @@ class AGiXTListen:
 
         # Minimum audio duration for transcription (in seconds)
         self.MIN_AUDIO_DURATION = 0.5
+
+        # Queue for audio chunks to be transcribed
+        self.transcription_queue = Queue()
 
         # Initialize SDK if API key is provided
         if self.api_key:
@@ -192,14 +199,24 @@ class AGiXTListen:
     def process_audio_buffer(self):
         if len(self.audio_buffer) > 0:
             audio_data = b"".join(self.audio_buffer)
+            self.transcription_queue.put(audio_data)
+            self.audio_buffer.clear()
+            self.last_transcription_time = time.time()
+
+    def transcribe_worker(self):
+        while True:
+            audio_data = self.transcription_queue.get()
+            if audio_data is None:
+                break  # Exit the thread when None is received
+
             transcription = self.transcribe_audio(audio_data)
             if transcription:
                 self.transcribed_text += transcription + " "
-                self.audio_buffer.clear()
-                self.last_transcription_time = time.time()
                 Clock.schedule_once(
                     lambda dt: MDApp.get_running_app()._update_notes()
                 )
+
+            self.transcription_queue.task_done()
 
     def transcribe_audio(self, audio_data):
         try:
@@ -256,8 +273,12 @@ class AGiXTListen:
         self.conversation_check_thread = threading.Thread(
             target=self.check_conversation_updates
         )
+        self.transcription_thread = threading.Thread(
+            target=self.transcribe_worker
+        )  # Start transcription worker thread
         self.input_recording_thread.start()
         self.conversation_check_thread.start()
+        self.transcription_thread.start()
 
     def stop_recording(self):
         self.is_recording = False
@@ -265,6 +286,10 @@ class AGiXTListen:
             self.input_recording_thread.join()
         if self.conversation_check_thread:
             self.conversation_check_thread.join()
+        self.transcription_queue.put(
+            None
+        )  # Signal transcription worker thread to exit
+        self.transcription_thread.join()
 
     def check_conversation_updates(self):
         while self.is_recording:
@@ -387,6 +412,14 @@ class AGiXTListen:
                 self.text_to_speech(response)
 
 
+class HoverFlatButton(MDRectangleFlatButton, HoverBehavior):
+    def on_enter(self):
+        self.md_bg_color = self.theme_cls.primary_color
+
+    def on_leave(self):
+        self.md_bg_color = self.theme_cls.bg_dark
+
+
 class AGiXTNoteApp(MDApp):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -400,21 +433,25 @@ class AGiXTNoteApp(MDApp):
 
         screen = MDScreen()
 
+        # Toolbar
         toolbar = MDTopAppBar(title="AGiXT Advanced Notes")
         toolbar.right_action_items = [
-            ["settings", lambda x: self.open_settings_dialog()]
+            ["cog-outline", lambda x: self.open_settings_dialog()]
         ]
         screen.add_widget(toolbar)
 
+        # Main Layout
         main_layout = MDBoxLayout(
             orientation="vertical", padding=dp(20), spacing=dp(20)
         )
 
+        # Notes Card
         notes_card = MDCard(
             orientation="vertical",
             padding=dp(10),
             size_hint=(1, 0.8),
             elevation=4,
+            md_bg_color=self.theme_cls.bg_darkest,
         )
         scroll_view = ScrollView(size_hint=(1, 1))
         self.notes_label = MDLabel(
@@ -422,12 +459,15 @@ class AGiXTNoteApp(MDApp):
             halign="left",
             valign="top",
             size_hint_y=None,
+            theme_text_color="Custom",
+            text_color=self.theme_cls.text_color,
         )
         self.notes_label.bind(texture_size=self.notes_label.setter("size"))
         scroll_view.add_widget(self.notes_label)
         notes_card.add_widget(scroll_view)
         main_layout.add_widget(notes_card)
 
+        # Controls Layout
         controls_layout = MDBoxLayout(
             orientation="horizontal",
             size_hint_y=None,
@@ -436,12 +476,19 @@ class AGiXTNoteApp(MDApp):
             spacing=dp(20),
         )
 
-        self.start_button = MDRaisedButton(text="Start Recording")
+        self.start_button = HoverFlatButton(
+            text="Start Recording",
+            pos_hint={"center_x": 0.5},
+            md_bg_color=self.theme_cls.primary_light,
+        )
         self.start_button.bind(on_release=self.toggle_recording)
         controls_layout.add_widget(self.start_button)
 
-        self.send_to_agixt_button = MDRaisedButton(
-            text="Send to AGiXT", disabled=True
+        self.send_to_agixt_button = HoverFlatButton(
+            text="Send to AGiXT",
+            pos_hint={"center_x": 0.5},
+            md_bg_color=self.theme_cls.primary_light,
+            disabled=True,
         )
         self.send_to_agixt_button.bind(
             on_release=self.send_transcription_to_agixt
