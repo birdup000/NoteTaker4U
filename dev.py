@@ -13,6 +13,19 @@ import traceback
 import tarfile
 from urllib.request import urlretrieve
 
+# KivyMD imports
+from kivymd.app import MDApp
+from kivymd.uix.screen import MDScreen
+from kivymd.uix.boxlayout import MDBoxLayout
+from kivymd.uix.label import MDLabel
+from kivymd.uix.textfield import MDTextField
+from kivymd.uix.button import MDRaisedButton, MDFlatButton
+from kivymd.uix.scrollview import ScrollView
+from kivymd.uix.dialog import MDDialog
+from kivymd.uix.card import MDCard
+from kivy.uix.floatlayout import FloatLayout
+from kivy.uix.gridlayout import GridLayout
+
 # Try to import PyAudio, install it if not found
 try:
     import pyaudio
@@ -64,7 +77,7 @@ class AGiXTListen:
         agent_name="gpt4free",
         conversation_name="",
         whisper_model="base.en",
-        wake_word="hey assistant",
+        wake_word="",  # Optional wake word, default empty string
     ):
         self.sdk = AGiXTSDK(base_uri=server, api_key=api_key)
         self.agent_name = agent_name
@@ -91,7 +104,7 @@ class AGiXTListen:
         self.conversation_check_thread = None
         self.vad = webrtcvad.Vad(3)  # Aggressiveness is 3 (highest)
 
-        # Initialize Pocketsphinx AFTER the model is downloaded in save_settings
+        # Initialize Pocketsphinx later if a wake word is provided
         self.ps = None  
         self.is_speaking_activity = False
 
@@ -254,7 +267,7 @@ class AGiXTListen:
         logging.info(f"Listening for wake word: '{self.wake_word}'")
 
         # Check if Pocketsphinx is initialized
-        if self.ps: 
+        if self.ps:
             while self.is_recording:
                 frame = stream.read(CHUNK)
                 is_speech = self.vad.is_speech(frame, RATE)
@@ -267,7 +280,7 @@ class AGiXTListen:
                         self.process_wake_word()
                     self.ps.end_utt()
         else:
-            logging.warning("Pocketsphinx not initialized. Skipping wake word detection.")
+            logging.warning("Pocketsphinx not initialized. Cannot listen for wake word.")
         stream.stop_stream()
         stream.close()
 
@@ -276,7 +289,7 @@ class AGiXTListen:
             time.sleep(2)  # Check every 2 seconds
             new_history = self.sdk.get_conversation(
                 agent_name=self.agent_name,
-                conversation_name=self.conversation_name, 
+                conversation_name=self.conversation_name,
                 limit=20,
                 page=1,
             )
@@ -303,14 +316,19 @@ class AGiXTListen:
         self.output_recording_thread = threading.Thread(
             target=self.continuous_record_and_transcribe, args=(False,)
         )
-        self.wake_word_thread = threading.Thread(target=self.listen_for_wake_word)
         self.conversation_check_thread = threading.Thread(
             target=self.check_conversation_updates
         )
+
+        # Start wake word thread only if wake_word is set
+        if self.wake_word:
+            self.wake_word_thread = threading.Thread(target=self.listen_for_wake_word)
+            self.wake_word_thread.start()
+
         self.input_recording_thread.start()
         self.output_recording_thread.start()
-        self.wake_word_thread.start()
         self.conversation_check_thread.start()
+
 
     def stop_recording(self):
         self.is_recording = False
@@ -342,7 +360,7 @@ class AGiXTListen:
     def listen(self):
         signal.signal(signal.SIGINT, self.graceful_shutdown)
         signal.signal(signal.SIGTERM, self.graceful_shutdown)
-        self.start_recording()
+        self.start_recording() # Start recording regardless of wake word 
         try:
             while True:
                 time.sleep(1)
@@ -353,77 +371,87 @@ class AGiXTListen:
             self.stop_recording()
             logging.info("Recording stopped.")
 
-
-# Kivy UI Code
-from kivy.app import App
-from kivy.uix.gridlayout import GridLayout
-from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.label import Label
-from kivy.uix.textinput import TextInput
-from kivy.uix.button import Button
-from kivy.uix.scrollview import ScrollView
-from kivy.uix.togglebutton import ToggleButton
-from kivy.uix.popup import Popup
-from kivy.uix.floatlayout import FloatLayout
-
-# AGiXTNoteApp Class
-class AGiXTNoteApp(App):
+class AGiXTNoteApp(MDApp):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.listener = None  # Initialize later after getting settings
+        self.listener = None
         self.is_recording = False
-        self.settings_popup = None
+        self.settings_dialog = None
 
     def build(self):
-        layout = GridLayout(cols=1)
+        self.theme_cls.theme_style = "Dark"  # or "Light"
+        self.theme_cls.primary_palette = "Teal"
+
+        screen = MDScreen()
+        main_layout = MDBoxLayout(orientation='vertical', padding=20, spacing=20)
 
         # Title
-        title_label = Label(text="AGiXT Advanced Notes", font_size=24)
-        layout.add_widget(title_label)
+        title_label = MDLabel(
+            text="AGiXT Advanced Notes", 
+            halign="center", 
+            font_style="H3", 
+            theme_text_color="Primary"
+        )
+        main_layout.add_widget(title_label)
 
-        # Notes Area (Scrollable)
-        self.notes_text_input = TextInput(readonly=True, multiline=True)
-        scroll_view = ScrollView()
-        scroll_view.add_widget(self.notes_text_input)
-        layout.add_widget(scroll_view)
+        # Notes Area (Scrollable Card)
+        notes_card = MDCard(
+            orientation="vertical", 
+            padding=10, 
+            size_hint=(1, 0.7),
+            elevation=4
+        )
+        self.notes_text_input = MDTextField(
+            readonly=True, 
+            multiline=True,
+            hint_text="Notes will appear here...",
+            mode="rectangle"
+        )
+        notes_card.add_widget(self.notes_text_input)
+        main_layout.add_widget(notes_card)
 
         # Controls Area
-        controls_layout = BoxLayout(orientation="horizontal", size_hint_y=0.1)
+        controls_layout = MDBoxLayout(
+            orientation="horizontal", 
+            size_hint_y=0.1, 
+            padding=10, 
+            spacing=20
+        )
 
-        self.start_button = ToggleButton(text="Start Recording")
-        self.start_button.bind(state=self.toggle_recording)
+        self.start_button = MDRaisedButton(text="Start Recording")
+        self.start_button.bind(on_release=self.toggle_recording)
         controls_layout.add_widget(self.start_button)
 
-        settings_button = Button(text="Settings")
-        settings_button.bind(on_press=self.open_settings_popup)
+        settings_button = MDFlatButton(text="Settings")
+        settings_button.bind(on_release=self.open_settings_dialog)
         controls_layout.add_widget(settings_button)
 
-        layout.add_widget(controls_layout)
+        main_layout.add_widget(controls_layout)
+        screen.add_widget(main_layout)
+        return screen
 
-        return layout
+    def toggle_recording(self, instance):
+        if not self.listener:
+            self.show_error_dialog("Error", "Please configure settings first.")
+            return
 
-    def toggle_recording(self, instance, value):
-        if value == 'down':  # Start recording
-            if not self.listener:
-                self.show_error_popup("Error", "Please configure settings first.")
-                self.start_button.state = 'normal'
+        if not self.is_recording:
+            # Ensure Pocketsphinx is initialized before starting the wake word thread
+            if self.listener.wake_word and self.listener.ps is None:
+                self.show_error_dialog(
+                    "Error", 
+                    "Pocketsphinx not initialized. Please save settings with a wake word."
+                )
                 return
 
             self.is_recording = True
-
-            # Ensure Pocketsphinx is initialized before starting the wake word thread
-            if self.listener.ps is None:
-                self.show_error_popup("Error", "Pocketsphinx not initialized. Please save settings.")
-                self.start_button.state = 'normal'
-                return
-
             self.listener.start_recording()
+            self.start_button.text = "Stop Recording"
             threading.Thread(target=self.update_notes).start()
-
-        else:  # Stop recording
+        else:
             self.is_recording = False
-            if self.listener:
-                self.listener.stop_recording()
+            self.listener.stop_recording()
+            self.start_button.text = "Start Recording"
 
     def update_notes(self):
         while self.is_recording:
@@ -431,43 +459,59 @@ class AGiXTNoteApp(App):
             if self.listener:
                 new_history = self.listener.sdk.get_conversation(
                     agent_name=self.listener.agent_name,
-                    conversation_name=self.listener.conversation_name, 
+                    conversation_name=self.listener.conversation_name,
                     limit=20,
                     page=1,
                 )
                 new_entries = [
-                    entry for entry in new_history if entry not in self.listener.conversation_history
+                    entry
+                    for entry in new_history
+                    if entry not in self.listener.conversation_history
                 ]
                 for entry in new_entries:
                     if not entry.startswith("[ACTIVITY]"):
                         self.notes_text_input.text += entry + "\n"
                 self.listener.conversation_history = new_history
 
-    def open_settings_popup(self, instance):
-        if self.settings_popup:
-            self.settings_popup.open()
+    def open_settings_dialog(self, instance):
+        if self.settings_dialog:
+            self.settings_dialog.open()
             return
 
-        content = FloatLayout()
+        # Create content for settings dialog
+        content = GridLayout(cols=2, padding=20, spacing=10)
 
-        # Input fields for settings
-        server_label = Label(text="Server URL:", pos_hint={'x': 0.1, 'y': 0.8})
-        self.server_input = TextInput(text="http://localhost:7437", pos_hint={'x': 0.1, 'y': 0.7}, size_hint=(0.8, 0.1))
+        server_label = MDLabel(text="Server URL:", halign="right")
+        self.server_input = MDTextField(
+            text="http://localhost:7437",
+            size_hint_x=0.7,
+        )
+        
+        api_key_label = MDLabel(text="API Key:", halign="right")
+        self.api_key_input = MDTextField(
+            text="", 
+            password=True, 
+            size_hint_x=0.7
+        )
+        
+        agent_name_label = MDLabel(text="Agent Name:", halign="right")
+        self.agent_name_input = MDTextField(
+            text="gpt4free",
+            size_hint_x=0.7,
+        )
+        
+        conversation_name_label = MDLabel(text="Conversation Name:", halign="right")
+        self.conversation_name_input = MDTextField(
+            text="", 
+            size_hint_x=0.7
+        )
+        
+        wake_word_label = MDLabel(text="Wake Word (Optional):", halign="right")
+        self.wake_word_input = MDTextField(
+            text="", 
+            size_hint_x=0.7
+        )
 
-        api_key_label = Label(text="API Key:", pos_hint={'x': 0.1, 'y': 0.6})
-        self.api_key_input = TextInput(text="", password=True, pos_hint={'x': 0.1, 'y': 0.5}, size_hint=(0.8, 0.1))
-
-        agent_name_label = Label(text="Agent Name:", pos_hint={'x': 0.1, 'y': 0.4})
-        self.agent_name_input = TextInput(text="gpt4free", pos_hint={'x': 0.1, 'y': 0.3}, size_hint=(0.8, 0.1))
-
-        conversation_name_label = Label(text="Conversation Name:", pos_hint={'x': 0.1, 'y': 0.2})
-        self.conversation_name_input = TextInput(text="", pos_hint={'x': 0.1, 'y': 0.1}, size_hint=(0.8, 0.1))
-
-        # Save button
-        save_button = Button(text="Save", pos_hint={'x': 0.4, 'y': 0.02}, size_hint=(0.2, 0.08))
-        save_button.bind(on_press=self.save_settings)
-
-        # Add elements to content
         content.add_widget(server_label)
         content.add_widget(self.server_input)
         content.add_widget(api_key_label)
@@ -476,10 +520,19 @@ class AGiXTNoteApp(App):
         content.add_widget(self.agent_name_input)
         content.add_widget(conversation_name_label)
         content.add_widget(self.conversation_name_input)
-        content.add_widget(save_button)
+        content.add_widget(wake_word_label)
+        content.add_widget(self.wake_word_input)
 
-        self.settings_popup = Popup(title="Settings", content=content, size_hint=(0.8, 0.8), auto_dismiss=False)
-        self.settings_popup.open()
+        self.settings_dialog = MDDialog(
+            title="Settings",
+            type="custom",
+            content_cls=content,
+            buttons=[
+                MDFlatButton(text="Cancel", on_release=self.close_settings_dialog),
+                MDRaisedButton(text="Save", on_release=self.save_settings),
+            ],
+        )
+        self.settings_dialog.open()
 
     def save_settings(self, instance):
         try:
@@ -487,21 +540,32 @@ class AGiXTNoteApp(App):
             api_key = self.api_key_input.text
             agent_name = self.agent_name_input.text
             conversation_name = self.conversation_name_input.text
+            wake_word = self.wake_word_input.text
 
-            # Download Pocketsphinx Model Here:
-            self._download_pocketsphinx_model()
+            # Download Pocketsphinx model only if wake_word is provided
+            if wake_word:
+                self._download_pocketsphinx_model()
 
-            # Now initialize AGiXTListen (Pocketsphinx will be initialized inside)
             self.listener = AGiXTListen(
                 server=server,
                 api_key=api_key,
                 agent_name=agent_name,
                 conversation_name=conversation_name,
+                wake_word=wake_word,
             )
 
-            self.settings_popup.dismiss()
+            # Initialize Pocketsphinx if wake_word is set
+            if wake_word:
+                self.listener.ps = Pocketsphinx(
+                    hmm=get_model_path("en-us"),
+                    lm=False,
+                    keyphrase=self.listener.wake_word,
+                    kws_threshold=1e-20,
+                )
+
+            self.close_settings_dialog()
         except Exception as e:
-            self.show_error_popup("Error", f"Failed to save settings: {str(e)}")
+            self.show_error_dialog("Error", f"Failed to save settings: {str(e)}")
 
     def _download_pocketsphinx_model(self, model_name="en-us", model_url="https://cmusphinx.github.io/wiki/download/pocketsphinx-en-us.tar.gz"):
         """Downloads and extracts the Pocketsphinx model if it doesn't exist."""
@@ -512,23 +576,29 @@ class AGiXTNoteApp(App):
             logging.info(f"Pocketsphinx model '{model_name}' not found. Downloading...")
             try:
                 temp_file, _ = urlretrieve(model_url)
-                
+
                 with tarfile.open(temp_file, "r:gz") as tar:
                     for member in tar.getmembers():
                         tar.extract(member, model_path)
-                        os.chmod(os.path.join(model_path, member.name), 0o444) 
+                        os.chmod(os.path.join(model_path, member.name), 0o444)
 
-                logging.info(f"Pocketsphinx model '{model_name}' downloaded and extracted successfully.")
+                logging.info(
+                    f"Pocketsphinx model '{model_name}' downloaded and extracted successfully."
+                )
                 os.remove(temp_file)
             except Exception as e:
-                logging.error(f"Error downloading or extracting Pocketsphinx model: {str(e)}")
+                logging.error(
+                    f"Error downloading or extracting Pocketsphinx model: {str(e)}"
+                )
                 raise
 
-    def show_error_popup(self, title, message):
-        content = Label(text=message)
-        popup = Popup(title=title, content=content, size_hint=(0.6, 0.3))
-        popup.open()
+    def close_settings_dialog(self, *args):
+        if self.settings_dialog:
+            self.settings_dialog.dismiss()
 
+    def show_error_dialog(self, title, message):
+        dialog = MDDialog(title=title, text=message)
+        dialog.open()
 
 if __name__ == "__main__":
     AGiXTNoteApp().run()
