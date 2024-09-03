@@ -416,7 +416,9 @@ class CustomNavigationRailItem(MDNavigationRailItem):
     text = StringProperty()
 
     def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+        super().__init__(**kwargs)  # Call superclass __init__
+        self._navigation_rail = self.parent  # Manually set _navigation_rail
+
         # Add icon and label directly in the constructor
         if self.icon:
             self.add_widget(MDNavigationRailItemIcon(icon=self.icon))
@@ -429,6 +431,11 @@ class CustomNavigationRail(MDNavigationRail):
         super().__init__(**kwargs)
         self.type = "selected"
         self.pos_hint = {"top": 1}  # Position the rail at the top
+
+    def on_add_widget(self, widget, index=0):
+        super().on_add_widget(widget, index)
+        if isinstance(widget, CustomNavigationRailItem):
+            widget._navigation_rail = self  # Set _navigation_rail after adding
 
 
 class AGiXTNoteApp(MDApp):
@@ -483,13 +490,7 @@ class AGiXTNoteApp(MDApp):
         nav_rail.add_widget(record_item)
         nav_rail.add_widget(settings_item)
 
-        # Delay setting the anchor_button
-        def set_anchor_button(dt):
-            nav_rail.anchor_button = record_item
-
-        Clock.schedule_once(set_anchor_button, 0.1)  # Delay of 0.1 seconds
-
-        return nav_rail
+        return nav_rail  # No need to set anchor_button
 
     def create_record_view(self):
         record_view = MDBoxLayout(orientation="vertical", spacing=dp(20))
