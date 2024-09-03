@@ -10,7 +10,7 @@ import sys
 import os
 import signal
 import traceback
-import tarfile
+import zipfile
 from urllib.request import urlretrieve
 import tempfile
 from collections import deque
@@ -21,19 +21,20 @@ from kivymd.uix.screen import MDScreen
 from kivymd.uix.boxlayout import MDBoxLayout
 from kivymd.uix.label import MDLabel
 from kivymd.uix.textfield import MDTextField
-from kivymd.uix.button import MDRaisedButton, MDFlatButton
-from kivymd.uix.scrollview import ScrollView
+from kivymd.uix.button import MDButton, MDFabButton
+from kivymd.uix.button.button import MDButtonText
+from kivymd.uix.scrollview import MDScrollView
 from kivymd.uix.dialog import MDDialog
 from kivymd.uix.card import MDCard
-from kivy.uix.floatlayout import FloatLayout
 from kivy.metrics import dp
-from kivymd.uix.gridlayout import MDGridLayout
+from kivymd.uix.navigationrail import (
+    MDNavigationRail,
+    MDNavigationRailItem,
+    MDNavigationRailItemIcon,
+    MDNavigationRailItemLabel,
+)
 from kivy.clock import Clock
-from kivymd.uix.toolbar import MDTopAppBar
-from kivymd.uix.list import OneLineListItem
-from kivymd.uix.button import MDRectangleFlatButton
-from kivymd.uix.behaviors import HoverBehavior
-from kivymd.uix.behaviors import RectangularRippleBehavior
+from kivy.properties import StringProperty
 
 # Set clipboard provider to SDL2
 import kivy
@@ -212,9 +213,7 @@ class AGiXTListen:
             transcription = self.transcribe_audio(audio_data)
             if transcription:
                 self.transcribed_text += transcription + " "
-                Clock.schedule_once(
-                    lambda dt: MDApp.get_running_app()._update_notes()
-                )
+                MDApp.get_running_app().schedule_update_notes()
 
             self.transcription_queue.task_done()
 
@@ -412,12 +411,24 @@ class AGiXTListen:
                 self.text_to_speech(response)
 
 
-class HoverFlatButton(MDRectangleFlatButton, HoverBehavior):
-    def on_enter(self):
-        self.md_bg_color = self.theme_cls.primary_color
+class CustomNavigationRailItem(MDNavigationRailItem):
+    icon = StringProperty()
+    text = StringProperty()
 
-    def on_leave(self):
-        self.md_bg_color = self.theme_cls.bg_dark
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        # Add icon and label directly in the constructor
+        if self.icon:
+            self.add_widget(MDNavigationRailItemIcon(icon=self.icon))
+        if self.text:
+            self.add_widget(MDNavigationRailItemLabel(text=self.text))
+
+
+class CustomNavigationRail(MDNavigationRail):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.type = "selected"
+        self.pos_hint = {"top": 1}  # Position the rail at the top
 
 
 class AGiXTNoteApp(MDApp):
@@ -426,24 +437,62 @@ class AGiXTNoteApp(MDApp):
         self.listener = None
         self.is_recording = False
         self.settings_dialog = None
+        self.current_view = "record"
 
     def build(self):
         self.theme_cls.theme_style = "Dark"
         self.theme_cls.primary_palette = "Teal"
 
-        screen = MDScreen()
+        main_layout = MDBoxLayout(orientation="horizontal")
 
-        # Toolbar
-        toolbar = MDTopAppBar(title="AGiXT Advanced Notes")
-        toolbar.right_action_items = [
-            ["cog-outline", lambda x: self.open_settings_dialog()]
-        ]
-        screen.add_widget(toolbar)
+        # Navigation Rail
+        self.nav_rail = self.create_navigation_rail()
+        main_layout.add_widget(self.nav_rail)
 
-        # Main Layout
-        main_layout = MDBoxLayout(
+        # Content Area
+        self.content_area = MDBoxLayout(
             orientation="vertical", padding=dp(20), spacing=dp(20)
         )
+
+        # Record View
+        self.record_view = self.create_record_view()
+
+        # Settings View
+        self.settings_view = self.create_settings_view()
+
+        # Initially show the record view
+        self.content_area.add_widget(self.record_view)
+        main_layout.add_widget(self.content_area)
+
+        return main_layout
+
+    def create_navigation_rail(self):
+        nav_rail = CustomNavigationRail()
+
+        record_item = MDNavigationRailItem(
+            MDNavigationRailItemIcon(icon="microphone"),
+            MDNavigationRailItemLabel(text="Record"),
+            on_release=lambda x: self.switch_view("record"),
+        )
+        settings_item = MDNavigationRailItem(
+            MDNavigationRailItemIcon(icon="cog"),
+            MDNavigationRailItemLabel(text="Settings"),
+            on_release=lambda x: self.switch_view("settings"),
+        )
+
+        nav_rail.add_widget(record_item)
+        nav_rail.add_widget(settings_item)
+
+        # Delay setting the anchor_button
+        def set_anchor_button(dt):
+            nav_rail.anchor_button = record_item
+
+        Clock.schedule_once(set_anchor_button, 0.1)  # Delay of 0.1 seconds
+
+        return nav_rail
+
+    def create_record_view(self):
+        record_view = MDBoxLayout(orientation="vertical", spacing=dp(20))
 
         # Notes Card
         notes_card = MDCard(
@@ -451,21 +500,21 @@ class AGiXTNoteApp(MDApp):
             padding=dp(10),
             size_hint=(1, 0.8),
             elevation=4,
-            md_bg_color=self.theme_cls.bg_darkest,
+            md_bg_color=self.theme_cls.surfaceColor,
         )
-        scroll_view = ScrollView(size_hint=(1, 1))
+        scroll_view = MDScrollView(size_hint=(1, 1))
         self.notes_label = MDLabel(
             text="Notes will appear here...",
             halign="left",
             valign="top",
             size_hint_y=None,
             theme_text_color="Custom",
-            text_color=self.theme_cls.text_color,
+            text_color=self.theme_cls.onSurfaceColor,
         )
         self.notes_label.bind(texture_size=self.notes_label.setter("size"))
         scroll_view.add_widget(self.notes_label)
         notes_card.add_widget(scroll_view)
-        main_layout.add_widget(notes_card)
+        record_view.add_widget(notes_card)
 
         # Controls Layout
         controls_layout = MDBoxLayout(
@@ -476,28 +525,53 @@ class AGiXTNoteApp(MDApp):
             spacing=dp(20),
         )
 
-        self.start_button = HoverFlatButton(
-            text="Start Recording",
-            pos_hint={"center_x": 0.5},
-            md_bg_color=self.theme_cls.primary_light,
+        self.start_button = MDFabButton(
+            icon="microphone", style="standard", on_release=self.toggle_recording
         )
-        self.start_button.bind(on_release=self.toggle_recording)
         controls_layout.add_widget(self.start_button)
 
-        self.send_to_agixt_button = HoverFlatButton(
-            text="Send to AGiXT",
-            pos_hint={"center_x": 0.5},
-            md_bg_color=self.theme_cls.primary_light,
+        self.send_to_agixt_button = MDFabButton(
+            icon="send",
+            style="standard",
+            on_release=self.send_transcription_to_agixt,
             disabled=True,
-        )
-        self.send_to_agixt_button.bind(
-            on_release=self.send_transcription_to_agixt
         )
         controls_layout.add_widget(self.send_to_agixt_button)
 
-        main_layout.add_widget(controls_layout)
-        screen.add_widget(main_layout)
-        return screen
+        record_view.add_widget(controls_layout)
+        return record_view
+
+    def create_settings_view(self):
+        settings_view = MDBoxLayout(orientation="vertical", spacing=dp(20))
+        self.server_input = MDTextField(
+            hint_text="Server URL", text="http://localhost:7437"
+        )
+        self.api_key_input = MDTextField(hint_text="API Key", password=True)
+        self.agent_name_input = MDTextField(hint_text="Agent Name", text="gpt4free")
+        self.conversation_name_input = MDTextField(hint_text="Conversation Name")
+        self.wake_word_input = MDTextField(hint_text="Wake Word (Optional)")
+
+        settings_view.add_widget(self.server_input)
+        settings_view.add_widget(self.api_key_input)
+        settings_view.add_widget(self.agent_name_input)
+        settings_view.add_widget(self.conversation_name_input)
+        settings_view.add_widget(self.wake_word_input)
+
+        save_button = MDButton(
+            MDButtonText(text="Save Settings"),
+            style="filled",
+            on_release=self.save_settings,
+        )
+        settings_view.add_widget(save_button)
+        return settings_view
+
+    def switch_view(self, view):
+        self.content_area.clear_widgets()
+        if view == "record":
+            self.content_area.add_widget(self.record_view)
+        elif view == "settings":
+            self.content_area.add_widget(self.settings_view)
+        self.current_view = view
 
     def toggle_recording(self, instance):
         if not self.listener:
@@ -507,28 +581,27 @@ class AGiXTNoteApp(MDApp):
         if self.is_recording:
             self.is_recording = False
             self.listener.stop_recording()
-            self.start_button.text = "Start Recording"
+            self.start_button.icon = "microphone"
             self.send_to_agixt_button.disabled = not self.listener.sdk
         else:
             self.is_recording = True
             self.listener.start_recording()
-            self.start_button.text = "Stop Recording"
+            self.start_button.icon = "stop"
             self.send_to_agixt_button.disabled = True
 
-    def _update_notes(self):
+    def schedule_update_notes(self):
+        Clock.schedule_once(self._update_notes)
+
+    def _update_notes(self, *args):
         if self.listener:
             self.notes_label.text = self.listener.transcribed_text
             if hasattr(self.notes_label, "parent") and isinstance(
-                self.notes_label.parent, ScrollView
+                self.notes_label.parent, MDScrollView
             ):
                 self.notes_label.parent.scroll_y = 0
 
     def send_transcription_to_agixt(self, instance):
-        if (
-            self.listener
-            and self.listener.sdk
-            and self.listener.transcribed_text
-        ):
+        if self.listener and self.listener.sdk and self.listener.transcribed_text:
             try:
                 memory_text = (
                     f"Content of voice transcription:\n{self.listener.transcribed_text}"
@@ -550,44 +623,6 @@ class AGiXTNoteApp(MDApp):
             self.show_error_dialog(
                 "Error", "AGiXT not connected or no transcription available."
             )
-
-    def open_settings_dialog(self):
-        if self.settings_dialog:
-            self.settings_dialog.open()
-            return
-
-        dialog_content = MDBoxLayout(
-            orientation="vertical",
-            spacing="12dp",
-            size_hint_y=None,
-            height="300dp",
-        )
-        self.server_input = MDTextField(
-            hint_text="Server URL", text="http://localhost:7437"
-        )
-        self.api_key_input = MDTextField(hint_text="API Key", password=True)
-        self.agent_name_input = MDTextField(
-            hint_text="Agent Name", text="gpt4free"
-        )
-        self.conversation_name_input = MDTextField(hint_text="Conversation Name")
-        self.wake_word_input = MDTextField(hint_text="Wake Word (Optional)")
-
-        dialog_content.add_widget(self.server_input)
-        dialog_content.add_widget(self.api_key_input)
-        dialog_content.add_widget(self.agent_name_input)
-        dialog_content.add_widget(self.conversation_name_input)
-        dialog_content.add_widget(self.wake_word_input)
-
-        self.settings_dialog = MDDialog(
-            title="Settings",
-            type="custom",
-            content_cls=dialog_content,
-            buttons=[
-                MDFlatButton(text="Cancel", on_release=self.close_settings_dialog),
-                MDRaisedButton(text="Save", on_release=self.save_settings),
-            ],
-        )
-        self.settings_dialog.open()
 
     def save_settings(self, instance):
         try:
@@ -624,14 +659,15 @@ class AGiXTNoteApp(MDApp):
                     kws_threshold=1e-20,
                 )
 
-            self.close_settings_dialog()
+            self.show_error_dialog("Success", "Settings saved successfully.")
+            self.switch_view("record")
         except Exception as e:
             self.show_error_dialog("Error", f"Failed to save settings: {str(e)}")
 
     def _download_pocketsphinx_model(
         self,
         model_name="en-us",
-        model_url="https://cmusphinx.github.io/wiki/download/pocketsphinx-en-us.tar.gz",
+        model_url="https://github.com/bambocher/pocketsphinx-schemas/raw/master/model/en-us.zip",
     ):
         model_path = get_model_path()
         model_dir = os.path.join(model_path, model_name)
@@ -643,10 +679,8 @@ class AGiXTNoteApp(MDApp):
             try:
                 temp_file, _ = urlretrieve(model_url)
 
-                with tarfile.open(temp_file, "r:gz") as tar:
-                    for member in tar.getmembers():
-                        tar.extract(member, model_path)
-                        os.chmod(os.path.join(model_path, member.name), 0o444)
+                with zipfile.ZipFile(temp_file, "r") as zip_ref:
+                    zip_ref.extractall(model_path)
 
                 logging.info(
                     f"Pocketsphinx model '{model_name}' downloaded and extracted successfully."
@@ -658,12 +692,18 @@ class AGiXTNoteApp(MDApp):
                 )
                 raise
 
-    def close_settings_dialog(self, *args):
-        if self.settings_dialog:
-            self.settings_dialog.dismiss()
-
     def show_error_dialog(self, title, message):
-        dialog = MDDialog(title=title, text=message)
+        dialog = MDDialog(
+            title=title,
+            text=message,
+            buttons=[
+                MDButton(
+                    MDButtonText(text="OK"),
+                    style="text",
+                    on_release=lambda x: dialog.dismiss(),
+                )
+            ],
+        )
         dialog.open()
 
 
